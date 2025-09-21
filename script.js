@@ -1,5 +1,5 @@
 // ======== 後端位置 ========
-const API_BASE = " https://timeout-checklist-server.onrender.com";
+const API_BASE = "https://timeout-checklist-server.onrender.com";
 
 // ======== 你的清單（跟後端一致）========
 const checklist = [
@@ -128,7 +128,7 @@ async function startRecording(){
   };
 
   // 每 2500ms 自動觸發一個 dataavailable（→ 2.5 秒一塊）
-  mediaRecorder.start(2500);
+  mediaRecorder.start(2250);
 }
 
 function stopFlow(){
