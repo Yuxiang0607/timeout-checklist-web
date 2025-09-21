@@ -1,101 +1,23 @@
 // ======== 後端位置 ========
 const API_BASE = "https://timeout-checklist-server.onrender.com";
 
-// ======== 你的清單（跟後端一致）========
-const checklist = [
-  { title: "Timeout Initiation", items: [
-    "Is everyone ready to begin the timeout?",
-    "Do we have the consent form in front of us?"
-  ]},
-  { title: "Team Introduction", items: [
-    "Please introduce yourselves.",
-    "Is the attending physician present?",
-    "Who is the anesthesia attending?",
-    "What are the names and roles of the other team members?"
-  ]},
-  { title: "Patient Identification", items: [
-    "What is your full name?",
-    "What is your date of birth?",
-    "What is your Medical Record Number?"
-  ]},
-  { title: "Surgical Consent Verification", items: [
-    "Is the consent form signed?",
-    "What surgery and/or block is being performed?",
-    "Which side?",
-    "Is it marked?"
-  ]},
-  { title: "Local Anesthetic Plan", items: [
-    "Which local anesthetic will be used?",
-    "What is the intended concentration?",
-    "What is the intended volume?"
-  ]},
-  { title: "Patient Medical Considerations", items: [
-    "Are you currently taking any anticoagulants?",
-    "Do you have any clotting disorders?",
-    "Do you have any known drug allergies?",
-    "Do you have a history of systemic neuropathy and/or neuropathy at the surgical site?"
-  ]},
-  { title: "Monitoring System Check", items: [
-    "Is NIBP monitoring ready?",
-    "Is ECG monitoring ready?",
-    "Is SpO₂ ready?",
-    "Is EtCO₂ monitoring ready?"
-  ]},
-  { title: "Additional Concerns", items: [
-    "Does anyone have any other question or concern?"
-  ]},
-  { title: "Timeout Completion", items: [
-    "Timeout completed."
-  ]}
-];
+// ======== 狀態列（可在 index.html body 最後加一個 <div id="status"></div>）=======
+const statusEl = document.getElementById('status') || (() => {
+  const d = document.createElement('div'); d.id = 'status';
+  d.style.maxWidth = '950px'; d.style.margin = '12px auto'; d.style.color = '#666';
+  document.body.appendChild(d); return d;
+})();
 
-// ======== 渲染 UI ========
-const checklistDiv = document.getElementById('checklist');
-const startBtn = document.getElementById('startBtn');
-const stopBtn = document.getElementById('stopBtn');
-const exportLink = document.getElementById('exportLink');
+function setStatus(msg) { statusEl.textContent = msg; }
 
-const allSentences = checklist.flatMap(g => g.items);
-const sentenceToIndex = new Map(allSentences.map((s, i) => [s, i]));
-
-const itemRows = [];
-checklist.forEach(group => {
-  const groupDiv = document.createElement('div');
-  groupDiv.className = 'group';
-  const titleDiv = document.createElement('div');
-  titleDiv.className = 'group-title';
-  titleDiv.textContent = group.title;
-  groupDiv.appendChild(titleDiv);
-  const ul = document.createElement('div');
-  ul.className = 'item-list';
-  group.items.forEach(text => {
-    const row = document.createElement('div');
-    row.className = 'item-row';
-    const span = document.createElement('span');
-    span.className = 'item-text';
-    span.textContent = text;
-    const dot = document.createElement('span');
-    dot.className = 'red-dot';
-    row.appendChild(span);
-    row.appendChild(dot);
-    ul.appendChild(row);
-    itemRows.push(row);
-  });
-  groupDiv.appendChild(ul);
-  checklistDiv.appendChild(groupDiv);
-});
-
-function setGreen(sentence){
-  const idx = sentenceToIndex.get(sentence);
-  if (idx == null) return;
-  const dot = itemRows[idx].querySelector('.red-dot');
-  dot.classList.add('green-dot');
-}
+// ======== 你的清單（略）========
+// ...（保留你原本的 checklist 產生與 setGreen() 等程式碼）
 
 // ======== Session & 錄音 ========
 let sessionId = null;
 let mediaRecorder = null;
 let listening = false;
+let streamRef = null; // 記住 MediaStream，Stop 時關掉
 
 async function newSession(){
   const res = await fetch(`${API_BASE}/start`, { method: "POST" });
@@ -105,59 +27,129 @@ async function newSession(){
   exportLink.style.display = "none";
 }
 
-async function startRecording(){
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-
-  mediaRecorder.ondataavailable = async (e) => {
-    if (!e.data || e.data.size === 0 || !listening) return;
-    const fd = new FormData();
-    fd.append("session_id", sessionId);
-    fd.append("audio", e.data, "chunk.webm");
-    try{
-      const res = await fetch(`${API_BASE}/chunk`, { method: "POST", body: fd });
-      const data = await res.json();
-      if (data.error){ console.error("Server error:", data.error); return; }
-      (data.hits || []).forEach(h => setGreen(h.sentence));
-      if (data.terminate){
-        stopFlow();
+async function requestMicOnce() {
+  // 有些瀏覽器需要在「點擊事件處理中」呼叫 getUserMedia 才會跳授權
+  try {
+    setStatus("Requesting microphone permission…");
+    const constraints = {
+      audio: {
+        channelCount: 1,
+        sampleRate: 48000,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: false
       }
-    }catch(err){
-      console.error(err);
+    };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    setStatus("Microphone permission granted.");
+    return stream;
+  } catch (err) {
+    console.error("getUserMedia error:", err);
+    let reason = "";
+    if (err.name === "NotAllowedError") {
+      reason = "Permission blocked. Click the lock icon → Site settings → Allow Microphone, then reload.";
+    } else if (err.name === "NotFoundError" || err.name === "OverconstrainedError") {
+      reason = "No microphone found, or the selected device is unavailable.";
+    } else if (err.name === "SecurityError") {
+      reason = "This page must be served over HTTPS or http://localhost.";
+    } else {
+      reason = err.message || String(err);
     }
-  };
+    setStatus("❌ Failed to access microphone: " + reason);
+    throw err;
+  }
+}
 
-  // 每 2500ms 自動觸發一個 dataavailable（→ 2.5 秒一塊）
-  mediaRecorder.start(2250);
+async function startRecording(){
+  if (!('MediaRecorder' in window)) {
+    setStatus("❌ Your browser does not support MediaRecorder. Try Chrome or Edge.");
+    alert("MediaRecorder not supported. Please use Chrome/Edge.");
+    return;
+  }
+  try {
+    // 這裡不再再次 getUserMedia，直接用前面 requestMicOnce() 拿到的 stream
+    const stream = streamRef;
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+
+    mediaRecorder.ondataavailable = async (e) => {
+      if (!e.data || e.data.size === 0 || !listening) return;
+      const fd = new FormData();
+      fd.append("session_id", sessionId);
+      fd.append("audio", e.data, "chunk.webm");
+      try {
+        const res = await fetch(`${API_BASE}/chunk`, { method: "POST", body: fd });
+        const data = await res.json();
+        if (data.error){ console.error("Server error:", data.error); setStatus("Server error: "+data.error); return; }
+        (data.hits || []).forEach(h => setGreen(h.sentence));
+        if (data.terminate){
+          setStatus("Detected: Timeout completed. Stopping…");
+          stopFlow();
+        }
+      } catch(err){
+        console.error(err);
+        setStatus("❌ Upload failed: " + err);
+      }
+    };
+
+    // 每 2500ms 觸發一塊
+    mediaRecorder.start(2500);
+    setStatus("Recording… sending 2.5s chunks to server.");
+  } catch (e) {
+    console.error("startRecording error:", e);
+    setStatus("❌ startRecording error: " + (e.message || e));
+  }
 }
 
 function stopFlow(){
   listening = false;
-  if (mediaRecorder && mediaRecorder.state !== "inactive"){
-    mediaRecorder.stop();
-  }
+  try {
+    if (mediaRecorder && mediaRecorder.state !== "inactive"){
+      mediaRecorder.stop();
+    }
+    if (streamRef) {
+      streamRef.getTracks().forEach(t => t.stop());
+      streamRef = null;
+    }
+  } catch {}
   startBtn.disabled = false;
   stopBtn.style.display = "none";
   startBtn.textContent = "🎤 Start Recognition";
-  exportLink.style.display = "inline-block"; // 可下載純文字結果
+  exportLink.style.display = "inline-block";
+  setStatus("Stopped. You can export the text or start again.");
 }
 
 startBtn.onclick = async ()=>{
+  // 環境檢查
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStatus("❌ This browser does not support getUserMedia.");
+    alert("Your browser does not support audio recording.");
+    return;
+  }
+
   // 重置 UI
   itemRows.forEach(r => r.querySelector('.red-dot').classList.remove('green-dot'));
   exportLink.style.display = "none";
-
   startBtn.disabled = true;
   stopBtn.style.display = "";
   startBtn.textContent = "🎙️ Recognizing...";
-  await newSession();
-  listening = true;
-  await startRecording();
+
+  try {
+    await newSession();
+    // **在點擊事件中**請求麥克風，確保會跳授權
+    streamRef = await requestMicOnce();
+    listening = true;
+    await startRecording();
+  } catch (e) {
+    // 若授權失敗，恢復按鈕
+    startBtn.disabled = false;
+    stopBtn.style.display = "none";
+    startBtn.textContent = "🎤 Start Recognition";
+  }
 };
 
 stopBtn.onclick = ()=>{
   const fd = new FormData();
-  fd.append("session_id", sessionId);
+  fd.append("session_id", sessionId || "");
   fetch(`${API_BASE}/reset`, { method: "POST", body: fd }).catch(()=>{});
   stopFlow();
 };
