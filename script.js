@@ -1,21 +1,10 @@
-// ================== 基本設定 ==================
-const API_BASE = "https://timeout-checklist-server.onrender.com"; // 你的 Render 後端
+// ====== 配置 ======
+const API_BASE = "https://timeout-checklist-server.onrender.com"; // ← 換成你的
+const CHUNK_MS = 2250; // 與後端設計相配
 
-// 狀態列（若 index.html 沒有 #status，就動態建立一個）
-const statusEl = document.getElementById('status') || (() => {
-  const d = document.createElement('div');
-  d.id = 'status';
-  d.style.maxWidth = '950px';
-  d.style.margin = '12px auto';
-  d.style.color = '#666';
-  d.style.fontSize = '0.95rem';
-  document.body.appendChild(d);
-  return d;
-})();
-function setStatus(msg) { statusEl.textContent = msg; }
-
-// ================== Checklist（前端顯示需與後端一致） ==================
-const checklist = [
+// ====== 從後端拿 canonical（避免前後端清單不同步）======
+let allSentences = [];
+let groups = [
   { title: "Timeout Initiation", items: [
     "Is everyone ready to begin the timeout?",
     "Do we have the consent form in front of us?"
@@ -62,197 +51,118 @@ const checklist = [
   ]}
 ];
 
-// ================== 渲染 UI ==================
+// 畫面渲染
 const checklistDiv = document.getElementById('checklist');
-const startBtn = document.getElementById('startBtn');
-const stopBtn = document.getElementById('stopBtn');
-const exportLink = document.getElementById('exportLink');
+function renderChecklist() {
+  checklistDiv.innerHTML = "";
+  groups.forEach((g, gi) => {
+    const groupDiv = document.createElement('div');
+    groupDiv.className = 'group';
+    const title = document.createElement('div');
+    title.className = 'group-title';
+    title.textContent = g.title;
+    groupDiv.appendChild(title);
 
-const allSentences = checklist.flatMap(g => g.items);
-const sentenceToIndex = new Map(allSentences.map((s, i) => [s, i]));
+    const list = document.createElement('div');
+    list.className = 'item-list';
+    g.items.forEach((txt, ii) => {
+      const row = document.createElement('div');
+      row.className = 'item-row';
+      row.dataset.key = txt;
 
-const itemRows = [];
-checklist.forEach(group => {
-  const groupDiv = document.createElement('div');
-  groupDiv.className = 'group';
+      const span = document.createElement('span');
+      span.className = 'item-text';
+      span.textContent = txt;
 
-  const titleDiv = document.createElement('div');
-  titleDiv.className = 'group-title';
-  titleDiv.textContent = group.title;
-  groupDiv.appendChild(titleDiv);
+      const dot = document.createElement('span');
+      dot.className = 'red-dot';
 
-  const ul = document.createElement('div');
-  ul.className = 'item-list';
-
-  group.items.forEach(text => {
-    const row = document.createElement('div');
-    row.className = 'item-row';
-
-    const span = document.createElement('span');
-    span.className = 'item-text';
-    span.textContent = text;
-
-    const dot = document.createElement('span');
-    dot.className = 'red-dot';
-
-    row.appendChild(span);
-    row.appendChild(dot);
-    ul.appendChild(row);
-
-    itemRows.push(row);
+      row.appendChild(span);
+      row.appendChild(dot);
+      list.appendChild(row);
+    });
+    groupDiv.appendChild(list);
+    checklistDiv.appendChild(groupDiv);
   });
 
-  groupDiv.appendChild(ul);
-  checklistDiv.appendChild(groupDiv);
-});
-
-function setGreen(sentence){
-  const idx = sentenceToIndex.get(sentence);
-  if (idx == null) return;
-  const dot = itemRows[idx].querySelector('.red-dot');
-  dot.classList.add('green-dot');
+  allSentences = groups.flatMap(g => g.items);
 }
+renderChecklist();
 
-// ================== Session & 錄音 ==================
-let sessionId = null;
-let mediaRecorder = null;
+// ====== 控制錄音 ======
+const startBtn = document.getElementById('startBtn');
+const stopBtn  = document.getElementById('stopBtn');
+const downloadLink = document.getElementById('downloadLink');
+
+let mediaRecorder, audioChunks = [];
 let listening = false;
-let streamRef = null; // 保存 MediaStream 以便停止時關閉
+let greened = new Set();
 
-async function newSession(){
-  const res = await fetch(`${API_BASE}/start`, { method: "POST" });
-  if (!res.ok) throw new Error(`Server /start failed: ${res.status}`);
-  const data = await res.json();
-  sessionId = data.session_id;
-  exportLink.href = `${API_BASE}/export/${sessionId}`;
-  exportLink.style.display = "none";
-}
+async function postChunk(blob) {
+  const fd = new FormData();
+  fd.append("audio", blob, "chunk.webm");
+  const res = await fetch(`${API_BASE}/transcribe-chunk`, { method: "POST", body: fd });
+  if (!res.ok) return;
 
-async function requestMicOnce() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    const msg = "This browser does not support getUserMedia. Use Chrome or Edge.";
-    setStatus("❌ " + msg);
-    throw new Error(msg);
-  }
-  try {
-    setStatus("Requesting microphone permission…");
-    const constraints = {
-      audio: {
-        channelCount: 1,
-        sampleRate: 48000,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: false
-      }
-    };
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    setStatus("Microphone permission granted.");
-    return stream;
-  } catch (err) {
-    console.error("getUserMedia error:", err);
-    let reason = "";
-    if (err.name === "NotAllowedError") {
-      reason = "Permission blocked. Click the lock icon → Site settings → Allow Microphone, then reload.";
-    } else if (err.name === "NotFoundError" || err.name === "OverconstrainedError") {
-      reason = "No microphone found, or the selected device is unavailable.";
-    } else if (err.name === "SecurityError") {
-      reason = "Must be served over HTTPS or http://localhost.";
-    } else {
-      reason = err.message || String(err);
+  const data = await res.json(); // {hits:[], raw:[], suggestions:[]}
+  (data.hits || []).forEach(sentence => {
+    // 去重：同一句只點一次
+    if (greened.has(sentence)) return;
+    const row = document.querySelector(`.item-row[data-key="${CSS.escape(sentence)}"]`);
+    if (row) {
+      row.querySelector('.red-dot').classList.add('green-dot');
+      greened.add(sentence);
+      // 自動收尾：若命中 "Timeout completed." 就停
+      if (sentence === "Timeout completed.") stopFlow();
     }
-    setStatus("❌ Failed to access microphone: " + reason);
-    throw err;
-  }
+  });
 }
 
-async function startRecording(){
-  if (!('MediaRecorder' in window)) {
-    const msg = "MediaRecorder not supported. Please use Chrome/Edge.";
-    setStatus("❌ " + msg);
-    alert(msg);
+async function startFlow() {
+  // reset UI
+  greened.clear();
+  document.querySelectorAll('.red-dot').forEach(d=>d.classList.remove('green-dot'));
+  downloadLink.style.display = "none";
+  audioChunks = [];
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert("Your browser does not support audio recording.");
     return;
   }
-  try {
-    const stream = streamRef;
-    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
 
-    mediaRecorder.ondataavailable = async (e) => {
-      if (!e.data || e.data.size === 0 || !listening) return;
-      const fd = new FormData();
-      fd.append("session_id", sessionId);
-      fd.append("audio", e.data, "chunk.webm");
-      try {
-        const res = await fetch(`${API_BASE}/chunk`, { method: "POST", body: fd });
-        const data = await res.json();
-        if (data.error){
-          console.error("Server error:", data.error);
-          setStatus("Server error: " + data.error);
-          return;
-        }
-        (data.hits || []).forEach(h => setGreen(h.sentence));
-        if (data.terminate){
-          setStatus("Detected: Timeout completed. Stopping…");
-          stopFlow();
-        }
-      } catch(err) {
-        console.error(err);
-        setStatus("❌ Upload failed: " + err);
-      }
-    };
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
 
-    // 每 2500ms 切一塊並觸發 ondataavailable
-    mediaRecorder.start(2250);
-    setStatus("Recording… sending 2.25s chunks to server.");
-  } catch (e) {
-    console.error("startRecording error:", e);
-    setStatus("❌ startRecording error: " + (e.message || e));
-  }
-}
-
-function stopFlow(){
-  listening = false;
-  try {
-    if (mediaRecorder && mediaRecorder.state !== "inactive"){
-      mediaRecorder.stop();
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) {
+      audioChunks.push(e.data);          // 做下載用
+      postChunk(e.data).catch(()=>{});   // 丟給後端辨識
     }
-    if (streamRef) {
-      streamRef.getTracks().forEach(t => t.stop());
-      streamRef = null;
-    }
-  } catch {}
-  startBtn.disabled = false;
-  stopBtn.style.display = "none";
-  startBtn.textContent = "🎤 Start Recognition";
-  exportLink.style.display = "inline-block";
-  setStatus("Stopped. You can export the text or start again.");
-}
+  };
+  mediaRecorder.onstop = () => {
+    const blob = new Blob(audioChunks, { type: "audio/webm" });
+    const url = URL.createObjectURL(blob);
+    downloadLink.href = url;
+    downloadLink.style.display = "inline-block";
+  };
 
-// ================== 按鈕事件 ==================
-startBtn.onclick = async ()=>{
-  // 重置 UI
-  itemRows.forEach(r => r.querySelector('.red-dot').classList.remove('green-dot'));
-  exportLink.style.display = "none";
-
+  listening = true;
   startBtn.disabled = true;
   stopBtn.style.display = "";
   startBtn.textContent = "🎙️ Recognizing...";
 
-  try {
-    await newSession();                 // 建立後端 session
-    streamRef = await requestMicOnce(); // 在點擊事件中請求麥克風（確保會跳授權）
-    listening = true;
-    await startRecording();             // 開始上傳 chunks
-  } catch (e) {
-    // 若授權或 /start 失敗，恢復按鈕
-    startBtn.disabled = false;
-    stopBtn.style.display = "none";
-    startBtn.textContent = "🎤 Start Recognition";
-  }
-};
+  // 每 CHUNK_MS 丟一塊（與後端預期一致）
+  mediaRecorder.start(CHUNK_MS);
+}
 
-stopBtn.onclick = ()=>{
-  const fd = new FormData();
-  fd.append("session_id", sessionId || "");
-  fetch(`${API_BASE}/reset`, { method: "POST", body: fd }).catch(()=>{});
-  stopFlow();
-};
+function stopFlow() {
+  if (!listening) return;
+  listening = false;
+  try { mediaRecorder && mediaRecorder.stop(); } catch {}
+  startBtn.disabled = false;
+  stopBtn.style.display = "none";
+  startBtn.textContent = "🎤 Start Recognition";
+}
+
+startBtn.onclick = () => startFlow();
+stopBtn.onclick  = () => stopFlow();
