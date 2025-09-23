@@ -1,10 +1,9 @@
-// ====== 配置 ======
-const API_BASE = "https://timeout-checklist-server.onrender.com"; // ← 換成你的
-const CHUNK_MS = 2250; // 與後端設計相配
+// ===== 後端位置（改成你的 Render 網址）=====
+const API_BASE = "https://timeout-checklist-server.onrender.com";
+const CHUNK_MS = 2250; // 與後端邏輯一致
 
-// ====== 從後端拿 canonical（避免前後端清單不同步）======
-let allSentences = [];
-let groups = [
+// ===== Checklist（視覺分組）=====
+const groups = [
   { title: "Timeout Initiation", items: [
     "Is everyone ready to begin the timeout?",
     "Do we have the consent form in front of us?"
@@ -51,21 +50,23 @@ let groups = [
   ]}
 ];
 
-// 畫面渲染
+// ===== Render UI =====
 const checklistDiv = document.getElementById('checklist');
 function renderChecklist() {
   checklistDiv.innerHTML = "";
-  groups.forEach((g, gi) => {
+  groups.forEach(g => {
     const groupDiv = document.createElement('div');
     groupDiv.className = 'group';
-    const title = document.createElement('div');
-    title.className = 'group-title';
-    title.textContent = g.title;
-    groupDiv.appendChild(title);
+
+    const titleDiv = document.createElement('div');
+    titleDiv.className = 'group-title';
+    titleDiv.textContent = g.title;
+    groupDiv.appendChild(titleDiv);
 
     const list = document.createElement('div');
     list.className = 'item-list';
-    g.items.forEach((txt, ii) => {
+
+    g.items.forEach(txt => {
       const row = document.createElement('div');
       row.className = 'item-row';
       row.dataset.key = txt;
@@ -81,62 +82,59 @@ function renderChecklist() {
       row.appendChild(dot);
       list.appendChild(row);
     });
+
     groupDiv.appendChild(list);
     checklistDiv.appendChild(groupDiv);
   });
-
-  allSentences = groups.flatMap(g => g.items);
 }
 renderChecklist();
 
-// ====== 控制錄音 ======
+// ===== Buttons / Recording =====
 const startBtn = document.getElementById('startBtn');
 const stopBtn  = document.getElementById('stopBtn');
 const downloadLink = document.getElementById('downloadLink');
 
 let mediaRecorder, audioChunks = [];
 let listening = false;
-let greened = new Set();
+const greened = new Set();
 
 async function postChunk(blob) {
   const fd = new FormData();
   fd.append("audio", blob, "chunk.webm");
   const res = await fetch(`${API_BASE}/transcribe-chunk`, { method: "POST", body: fd });
   if (!res.ok) return;
+  const data = await res.json(); // {hits, raw, suggestions}
 
-  const data = await res.json(); // {hits:[], raw:[], suggestions:[]}
   (data.hits || []).forEach(sentence => {
-    // 去重：同一句只點一次
     if (greened.has(sentence)) return;
     const row = document.querySelector(`.item-row[data-key="${CSS.escape(sentence)}"]`);
     if (row) {
       row.querySelector('.red-dot').classList.add('green-dot');
       greened.add(sentence);
-      // 自動收尾：若命中 "Timeout completed." 就停
       if (sentence === "Timeout completed.") stopFlow();
     }
   });
 }
 
 async function startFlow() {
-  // reset UI
   greened.clear();
-  document.querySelectorAll('.red-dot').forEach(d=>d.classList.remove('green-dot'));
+  document.querySelectorAll('.red-dot').forEach(d => d.classList.remove('green-dot'));
   downloadLink.style.display = "none";
   audioChunks = [];
 
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+  if (!navigator.mediaDevices?.getUserMedia) {
     alert("Your browser does not support audio recording.");
     return;
   }
-
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+  // 注意：有些瀏覽器需指定 mimeType；若 Safari 失敗可改成 audio/mp4
   mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
 
   mediaRecorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) {
-      audioChunks.push(e.data);          // 做下載用
-      postChunk(e.data).catch(()=>{});   // 丟給後端辨識
+    if (e.data?.size > 0) {
+      audioChunks.push(e.data);            // 累積整段，給下載連結
+      postChunk(e.data).catch(() => {});   // 即時送後端
     }
   };
   mediaRecorder.onstop = () => {
@@ -150,19 +148,17 @@ async function startFlow() {
   startBtn.disabled = true;
   stopBtn.style.display = "";
   startBtn.textContent = "🎙️ Recognizing...";
-
-  // 每 CHUNK_MS 丟一塊（與後端預期一致）
-  mediaRecorder.start(CHUNK_MS);
+  mediaRecorder.start(CHUNK_MS);           // 每 2.25 秒觸發一次 ondataavailable
 }
 
 function stopFlow() {
   if (!listening) return;
   listening = false;
-  try { mediaRecorder && mediaRecorder.stop(); } catch {}
+  try { mediaRecorder?.stop(); } catch {}
   startBtn.disabled = false;
   stopBtn.style.display = "none";
   startBtn.textContent = "🎤 Start Recognition";
 }
 
-startBtn.onclick = () => startFlow();
-stopBtn.onclick  = () => stopFlow();
+startBtn.onclick = startFlow;
+stopBtn.onclick  = stopFlow;
