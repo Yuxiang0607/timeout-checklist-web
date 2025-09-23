@@ -1,8 +1,9 @@
-// ===== 後端位置（改成你的 Render 網址）=====
-const API_BASE = "https://timeout-checklist-server.onrender.com";
-const CHUNK_MS = 2250; // 與後端邏輯一致
+// ===================== 配置 =====================
+const API_BASE = "https://timeout-checklist-server.onrender.com"; // ← 換成你的後端網址
+const CHUNK_MS = 2250;                                           // 與後端邏輯一致
+const TIMEOUT_SENTENCE = "Timeout completed.";
 
-// ===== Checklist（視覺分組）=====
+// ===================== Checklist（視覺資料）=====================
 const groups = [
   { title: "Timeout Initiation", items: [
     "Is everyone ready to begin the timeout?",
@@ -50,7 +51,7 @@ const groups = [
   ]}
 ];
 
-// ===== Render UI =====
+// ===================== 畫面渲染 =====================
 const checklistDiv = document.getElementById('checklist');
 function renderChecklist() {
   checklistDiv.innerHTML = "";
@@ -89,58 +90,99 @@ function renderChecklist() {
 }
 renderChecklist();
 
-// ===== Buttons / Recording =====
+// ===================== 錄音與上傳 =====================
 const startBtn = document.getElementById('startBtn');
 const stopBtn  = document.getElementById('stopBtn');
 const downloadLink = document.getElementById('downloadLink');
 
-let mediaRecorder, audioChunks = [];
+let mediaRecorder;
+let audioChunks = [];
 let listening = false;
 const greened = new Set();
 
-async function postChunk(blob) {
-  const fd = new FormData();
-  fd.append("audio", blob, "chunk.webm");
-  const res = await fetch(`${API_BASE}/transcribe-chunk`, { method: "POST", body: fd });
-  if (!res.ok) return;
-  const data = await res.json(); // {hits, raw, suggestions}
+// 智慧選擇 mimeType：Chrome/Edge 用 webm；Safari 用 mp4
+function chooseMimeType() {
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4',              // Safari 常用
+    'audio/mp4;codecs=aac'
+  ];
+  for (const t of candidates) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return ''; // 讓瀏覽器自行決定
+}
 
-  (data.hits || []).forEach(sentence => {
-    if (greened.has(sentence)) return;
-    const row = document.querySelector(`.item-row[data-key="${CSS.escape(sentence)}"]`);
-    if (row) {
-      row.querySelector('.red-dot').classList.add('green-dot');
-      greened.add(sentence);
-      if (sentence === "Timeout completed.") stopFlow();
+async function postChunk(blob, filename) {
+  // 確保一定帶副檔名 → 後端能把檔名傳給 OpenAI，避免 "unsupported"
+  const fd = new FormData();
+  fd.append("audio", blob, filename);
+
+  try {
+    const res = await fetch(`${API_BASE}/transcribe-chunk`, {
+      method: "POST",
+      body: fd,
+      // 防止部分 proxy 快取（通常不需要，但保險）
+      headers: { "x-request-id": String(Date.now()) }
+    });
+    if (!res.ok) {
+      console.warn("Chunk request failed:", res.status, await res.text());
+      return;
     }
-  });
+    const data = await res.json(); // {hits:[], raw:[], suggestions:[]}
+
+    (data.hits || []).forEach(sentence => {
+      if (greened.has(sentence)) return;
+      const row = document.querySelector(`.item-row[data-key="${CSS.escape(sentence)}"]`);
+      if (row) {
+        row.querySelector('.red-dot').classList.add('green-dot');
+        greened.add(sentence);
+        if (sentence === TIMEOUT_SENTENCE) stopFlow(); // 命中終止句 → 自動停
+      }
+    });
+  } catch (err) {
+    console.error("postChunk error:", err);
+  }
 }
 
 async function startFlow() {
+  // Reset UI
   greened.clear();
   document.querySelectorAll('.red-dot').forEach(d => d.classList.remove('green-dot'));
   downloadLink.style.display = "none";
   audioChunks = [];
 
+  // 先 ping /health，喚醒免費方案（避免第一包被冷啟延遲拖垮）
+  try { await fetch(`${API_BASE}/health`, { cache: "no-store" }); } catch {}
+
   if (!navigator.mediaDevices?.getUserMedia) {
     alert("Your browser does not support audio recording.");
     return;
   }
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-  // 注意：有些瀏覽器需指定 mimeType；若 Safari 失敗可改成 audio/mp4
-  mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const type = chooseMimeType();
+  mediaRecorder = type ? new MediaRecorder(stream, { mimeType: type })
+                       : new MediaRecorder(stream);
 
   mediaRecorder.ondataavailable = (e) => {
-    if (e.data?.size > 0) {
-      audioChunks.push(e.data);            // 累積整段，給下載連結
-      postChunk(e.data).catch(() => {});   // 即時送後端
+    if (e.data && e.data.size > 0) {
+      audioChunks.push(e.data); // 用來做整段下載
+      // 根據 MIME 決定副檔名（一定要帶副檔名）
+      const ext = (mediaRecorder.mimeType || type || 'audio/webm').includes('mp4') ? 'mp4' : 'webm';
+      const fname = `chunk_${Date.now()}.${ext}`;
+      postChunk(e.data, fname).catch(()=>{});
     }
   };
+
   mediaRecorder.onstop = () => {
-    const blob = new Blob(audioChunks, { type: "audio/webm" });
+    // 生成整段錄音讓使用者下載
+    const ext = (mediaRecorder.mimeType || type || 'audio/webm').includes('mp4') ? 'mp4' : 'webm';
+    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || `audio/${ext}` });
     const url = URL.createObjectURL(blob);
     downloadLink.href = url;
+    downloadLink.download = `timeout-audio.${ext}`;
     downloadLink.style.display = "inline-block";
   };
 
@@ -148,13 +190,15 @@ async function startFlow() {
   startBtn.disabled = true;
   stopBtn.style.display = "";
   startBtn.textContent = "🎙️ Recognizing...";
-  mediaRecorder.start(CHUNK_MS);           // 每 2.25 秒觸發一次 ondataavailable
+
+  // 每 CHUNK_MS 觸發 ondataavailable
+  mediaRecorder.start(CHUNK_MS);
 }
 
 function stopFlow() {
   if (!listening) return;
   listening = false;
-  try { mediaRecorder?.stop(); } catch {}
+  try { mediaRecorder && mediaRecorder.stop(); } catch {}
   startBtn.disabled = false;
   stopBtn.style.display = "none";
   startBtn.textContent = "🎤 Start Recognition";
