@@ -9,7 +9,7 @@
     .card{background:#fff;border-radius:16px;box-shadow:0 6px 20px rgba(0,0,0,.06);padding:20px;margin:16px auto;max-width:920px}
     h2{margin:0 0 12px 0}
     .item{display:flex;justify-content:space-between;align-items:center;background:#f6f7f9;border-radius:12px;padding:14px 16px;margin:10px 0}
-    .dot{width:12px;height:12px;border-radius:50%;background:#e11919; /* red */}
+    .dot{width:12px;height:12px;border-radius:50%;background:#e11919; /* red */ cursor:pointer;}  /* ← 允許點擊 */
     .dot.ok{background:#21a453;} /* green */
     .row{display:flex;gap:12px;margin:10px 0}
     button{border:0;border-radius:10px;padding:10px 14px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.08)}
@@ -95,7 +95,7 @@ function renderChecklist(){
     items.forEach(sent=>{
       const row = document.createElement("div");
       row.className = "item";
-      row.innerHTML = `<div>${sent}</div><div class="dot" data-sent="${sent}"></div>`;
+      row.innerHTML = `<div>${sent}</div><div class="dot" data-sent="${sent}" title="Click to toggle"></div>`;
       group.appendChild(row);
     });
     const card = document.createElement("div"); card.className="card"; card.appendChild(group);
@@ -103,6 +103,8 @@ function renderChecklist(){
   });
   document.querySelectorAll(".dot").forEach(d=>{
     dotMap.set(d.dataset.sent, d);
+    // ← 新增：手動切換紅/綠
+    d.addEventListener('click', () => d.classList.toggle('ok'));
   });
 }
 renderChecklist();
