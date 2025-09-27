@@ -1,20 +1,170 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>AI-Assisted Timeout Checklist</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta charset="utf-8"/>
+  <title>OR Timeout Checker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f7f8fa;margin:0;padding:24px;color:#111}
+    .card{background:#fff;border-radius:16px;box-shadow:0 6px 20px rgba(0,0,0,.06);padding:20px;margin:16px auto;max-width:920px}
+    h2{margin:0 0 12px 0}
+    .item{display:flex;justify-content:space-between;align-items:center;background:#f6f7f9;border-radius:12px;padding:14px 16px;margin:10px 0}
+    .dot{width:12px;height:12px;border-radius:50%;background:#e11919; /* red */}
+    .dot.ok{background:#21a453;} /* green */
+    .row{display:flex;gap:12px;margin:10px 0}
+    button{border:0;border-radius:10px;padding:10px 14px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+    button.primary{background:#111;color:#fff}
+    button.secondary{background:#eaeef3}
+    .log{white-space:pre-wrap;background:#0a0a0a;color:#d6ffd6;border-radius:10px;padding:12px;font-size:12px;max-height:200px;overflow:auto}
+    a{color:#0d6efd;text-decoration:none}
+  </style>
 </head>
 <body>
-  <div id="checklist"></div>
-
-  <div class="button-row">
-    <button id="startBtn">🎤 Start Recognition</button>
-    <button id="stopBtn" style="display:none;">🛑 Stop Recognition</button>
-    <a id="downloadLink" style="display:none;" download="timeout-audio.webm">⬇️ Download Audio</a>
+  <div class="card">
+    <h2>Audio Controls</h2>
+    <div class="row">
+      <button id="btnStart" class="primary">Start</button>
+      <button id="btnStop" class="secondary" disabled>Stop & Upload</button>
+      <button id="btnReset" class="secondary">Reset Lights</button>
+      <a id="dl" style="display:none" target="_blank">Download transcript</a>
+    </div>
+    <small>Recording format: WebM (Opus). Your API key stays on the server.</small>
+    <div id="status" class="log" style="margin-top:12px;"></div>
   </div>
 
-  <script src="script.js"></script>
+  <div class="card" id="checklist"></div>
+
+<script>
+const BACKEND_BASE = "https://<YOUR-RENDER-BACKEND>.onrender.com"; // ← 改成你的後端
+const GROUPS = [
+  ["Timeout Initiation", [
+    "Is everyone ready to begin the timeout?",
+    "Do we have the consent form in front of us?"
+  ]],
+  ["Team Introduction", [
+    "Please introduce yourselves.",
+    "Is the attending physician present?",
+    "Who is the anesthesia attending?",
+    "What are the names and roles of the other team members?"
+  ]],
+  ["Patient Identification", [
+    "What is your full name?",
+    "What is your date of birth?",
+    "What is your Medical Record Number?"
+  ]],
+  ["Surgical Consent Verification", [
+    "Is the consent form signed?",
+    "What surgery and/or block is being performed?",
+    "Which side?",
+    "Is it marked?"
+  ]],
+  ["Local Anesthetic Plan", [
+    "Which local anesthetic will be used?",
+    "What is the intended concentration?",
+    "What is the intended volume?"
+  ]],
+  ["Screening & Risks", [
+    "Are you currently taking any anticoagulants?",
+    "Do you have any clotting disorders?",
+    "Do you have any known drug allergies?",
+    "Do you have a history of systemic neuropathy and/or neuropathy at the surgical site?"
+  ]],
+  ["Monitoring Checklist", [
+    "Is NIBP monitoring ready?",
+    "Is ECG monitoring ready?",
+    "Is SpO₂ ready?",
+    "Is EtCO₂ monitoring ready?",
+    "Does anyone have any other question or concern?",
+    "Timeout completed."
+  ]]
+];
+
+const checklistEl = document.getElementById("checklist");
+const dotMap = new Map(); // sentence -> dot element
+
+function renderChecklist(){
+  checklistEl.innerHTML = "";
+  GROUPS.forEach(([title, items])=>{
+    const group = document.createElement("div");
+    group.className = "group";
+    group.innerHTML = `<h2>${title}</h2>`;
+    items.forEach(sent=>{
+      const row = document.createElement("div");
+      row.className = "item";
+      row.innerHTML = `<div>${sent}</div><div class="dot" data-sent="${sent}"></div>`;
+      group.appendChild(row);
+    });
+    const card = document.createElement("div"); card.className="card"; card.appendChild(group);
+    checklistEl.appendChild(card);
+  });
+  document.querySelectorAll(".dot").forEach(d=>{
+    dotMap.set(d.dataset.sent, d);
+  });
+}
+renderChecklist();
+
+function resetLights(){
+  dotMap.forEach(dot=>dot.classList.remove("ok"));
+  document.getElementById("dl").style.display="none";
+}
+document.getElementById("btnReset").onclick = resetLights;
+
+let mediaRecorder, chunks = [];
+const statusEl = document.getElementById("status");
+function log(s){ statusEl.textContent = (statusEl.textContent + s + "\n").slice(-4000); }
+
+async function startRec(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    chunks = [];
+    mediaRecorder = new MediaRecorder(stream, {mimeType: "audio/webm"});
+    mediaRecorder.ondataavailable = e => { if (e.data.size>0) chunks.push(e.data); };
+    mediaRecorder.onstop = onStopAndUpload;
+    mediaRecorder.start();
+    log("🎙️ Recording started…");
+    document.getElementById("btnStart").disabled = true;
+    document.getElementById("btnStop").disabled = false;
+  }catch(err){
+    log("Microphone error: " + err);
+  }
+}
+document.getElementById("btnStart").onclick = startRec;
+
+function stopRec(){
+  if (mediaRecorder && mediaRecorder.state !== "inactive"){
+    mediaRecorder.stop();
+    document.getElementById("btnStop").disabled = true;
+    document.getElementById("btnStart").disabled = false;
+  }
+}
+document.getElementById("btnStop").onclick = stopRec;
+
+async function onStopAndUpload(){
+  log("⏹️ Recording stopped. Uploading…");
+  const blob = new Blob(chunks, {type:"audio/webm"});
+  const fd = new FormData(); fd.append("file", blob, "recording.webm");
+  try{
+    const res = await fetch(`${BACKEND_BASE}/upload-audio`, {method:"POST", body:fd});
+    if(!res.ok){ throw new Error(await res.text()); }
+    const data = await res.json();
+    log("✅ STT finished.\nMatched:\n- " + data.matched.join("\n- "));
+    // 點燈
+    resetLights();
+    (data.matched || []).forEach(sent=>{
+      const dot = dotMap.get(sent);
+      if(dot) dot.classList.add("ok");
+    });
+    // 下載純淨稿
+    if (data.transcript_url){
+      const a = document.getElementById("dl");
+      a.href = `${BACKEND_BASE}${data.transcript_url}`;
+      a.textContent = "Download transcript";
+      a.style.display = "inline-block";
+    }
+  }catch(err){
+    log("❌ Upload/STT error: " + err);
+  }
+}
+</script>
 </body>
 </html>
