@@ -5,117 +5,155 @@
   <title>OR Timeout Checker</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
 
-  <!-- Google Fonts -->
-  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- 字體 -->
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&family=Noto+Sans:wght@400;500&display=swap" rel="stylesheet">
 
   <style>
+    /* ====== 全局設定 ====== */
     body {
-      font-family: 'Poppins', sans-serif;
-      background: linear-gradient(135deg, #f5f6f8, #e9ecef);
+      font-family: 'Noto Sans', 'Poppins', sans-serif;
+      background: linear-gradient(135deg, #f8fafc, #eef3f7);
       margin: 0;
-      padding: 32px;
-      color: #222;
-      font-size: 20px; /* 🔠 整體字體放大 */
+      padding: 40px 24px;
+      color: #2c3e50;
+      font-size: 20px;
+      line-height: 1.6;
     }
 
+    /* ====== 卡片 ====== */
     .card {
-      background: #ffffff;
-      border-radius: 18px;
-      border: 1px solid #e3e6ea; /* 柔和邊框取代陰影 */
-      padding: 28px;
-      margin: 22px auto;
+      background: #fff;
+      border-radius: 20px;
+      border: 1px solid #e3e8ee;
+      padding: 28px 32px;
+      margin: 26px auto;
       max-width: 900px;
+      transition: all 0.2s ease;
     }
 
+    /* ====== 標題 ====== */
     h2 {
       margin: 0 0 18px 0;
       font-weight: 600;
-      font-size: 1.6em; /* 🔠 標題放大 */
-      color: #333;
-      border-left: 6px solid #444;
-      padding-left: 12px;
+      font-size: 1.6em;
+      color: #1e293b;
+      border-left: 6px solid #0077b6;
+      padding-left: 14px;
+      letter-spacing: 0.5px;
     }
 
+    /* ====== 每句項目 ====== */
     .item {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      background: #f8f9fb;
+      background: #f9fbfd;
       border-radius: 12px;
       padding: 18px 20px;
       margin: 12px 0;
-      font-size: 1.1em; /* 🔠 每句文字放大 */
-      color: #111;
+      font-size: 1.1em;
+      transition: background 0.25s ease;
     }
 
+    .item:hover {
+      background: #eef4f8;
+    }
+
+    /* ====== 狀態燈號 ====== */
     .dot {
-      width: 18px; /* 🔠 點也稍微變大 */
-      height: 18px;
+      width: 20px;
+      height: 20px;
       border-radius: 50%;
-      background: #e74c3c; /* red */
+      background: #e74c3c;
+      box-shadow: 0 0 8px rgba(231, 76, 60, 0.6);
       cursor: pointer;
-      transition: background 0.3s ease, transform 0.15s ease;
+      transition: all 0.25s ease;
     }
 
     .dot.ok {
-      background: #27ae60; /* green */
-      transform: scale(1.2);
+      background: #2ecc71;
+      box-shadow: 0 0 10px rgba(46, 204, 113, 0.8);
+      transform: scale(1.1);
     }
 
+    /* ====== 按鈕 ====== */
     .row {
       display: flex;
       gap: 16px;
       margin: 12px 0;
+      flex-wrap: wrap;
     }
 
     button {
-      border: 0;
+      border: none;
       border-radius: 10px;
-      padding: 14px 20px;
+      padding: 14px 22px;
       cursor: pointer;
-      font-size: 1.05em; /* 🔠 按鈕文字放大 */
+      font-size: 1.05em;
       font-weight: 500;
-      transition: background 0.3s ease, transform 0.1s ease;
+      transition: all 0.25s ease;
     }
 
     button.primary {
-      background: #222;
+      background: #0077b6;
       color: #fff;
     }
-
-    button.primary:hover {
-      background: #444;
-    }
+    button.primary:hover { background: #005f8f; }
 
     button.secondary {
-      background: #e9edf2;
+      background: #edf2f7;
       color: #333;
     }
-
     button.secondary:hover {
-      background: #dfe3e9;
+      background: #e1e8ee;
     }
 
+    small {
+      color: #6b7280;
+    }
+
+    /* ====== 日誌區 ====== */
     .log {
       white-space: pre-wrap;
       background: #0a0a0a;
       color: #d6ffd6;
       border-radius: 10px;
       padding: 14px;
-      font-size: 15px; /* 🔠 log 區域稍微放大 */
+      font-size: 15px;
       max-height: 220px;
       overflow: auto;
       margin-top: 12px;
     }
 
     a {
-      color: #007bff;
+      color: #0077b6;
       text-decoration: none;
       font-weight: 500;
     }
+    a:hover { text-decoration: underline; }
 
-    a:hover {
-      text-decoration: underline;
+    /* ====== 進度條 ====== */
+    #progressBarContainer {
+      margin-top: 12px;
+      height: 12px;
+      border-radius: 10px;
+      background: #e0e6eb;
+      overflow: hidden;
+    }
+
+    #progressBar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #00b4d8, #0077b6);
+      border-radius: 10px;
+      transition: width 0.5s ease;
+    }
+
+    #progressText {
+      margin-top: 8px;
+      font-size: 16px;
+      text-align: right;
+      color: #475569;
     }
   </style>
 </head>
@@ -130,6 +168,10 @@
       <a id="dl" style="display:none" target="_blank">Download transcript</a>
     </div>
     <small>Recording format: WebM (Opus). Your API key stays on the server.</small>
+    <div id="progressBarContainer">
+      <div id="progressBar"></div>
+    </div>
+    <div id="progressText">0 / 0 Completed</div>
     <div id="status" class="log"></div>
   </div>
 
@@ -208,14 +250,28 @@ function renderChecklist(){
 
   document.querySelectorAll(".dot").forEach(d=>{
     dotMap.set(d.dataset.sent, d);
-    d.addEventListener('click', () => d.classList.toggle('ok'));
+    d.addEventListener('click', () => {
+      d.classList.toggle('ok');
+      updateProgress();
+    });
   });
+
+  updateProgress();
 }
 renderChecklist();
+
+function updateProgress(){
+  const total = dotMap.size;
+  const done = [...dotMap.values()].filter(dot => dot.classList.contains('ok')).length;
+  const percent = total ? (done / total) * 100 : 0;
+  document.getElementById("progressBar").style.width = percent + "%";
+  document.getElementById("progressText").textContent = `${done} / ${total} Completed`;
+}
 
 function resetLights(){
   dotMap.forEach(dot=>dot.classList.remove("ok"));
   document.getElementById("dl").style.display="none";
+  updateProgress();
 }
 document.getElementById("btnReset").onclick = resetLights;
 
@@ -264,6 +320,7 @@ async function onStopAndUpload(){
       const dot = dotMap.get(sent);
       if(dot) dot.classList.add("ok");
     });
+    updateProgress();
     if (data.transcript_url){
       const a = document.getElementById("dl");
       a.href = `${BACKEND_BASE}${data.transcript_url}`;
