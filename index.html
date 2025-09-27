@@ -4,38 +4,153 @@
   <meta charset="utf-8"/>
   <title>OR Timeout Checker</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+
+  <!-- Google Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#f7f8fa;margin:0;padding:24px;color:#111}
-    .card{background:#fff;border-radius:16px;box-shadow:0 6px 20px rgba(0,0,0,.06);padding:20px;margin:16px auto;max-width:920px}
-    h2{margin:0 0 12px 0}
-    .item{display:flex;justify-content:space-between;align-items:center;background:#f6f7f9;border-radius:12px;padding:14px 16px;margin:10px 0}
-    .dot{width:12px;height:12px;border-radius:50%;background:#e11919; /* red */ cursor:pointer;}  /* ← 允許點擊 */
-    .dot.ok{background:#21a453;} /* green */
-    .row{display:flex;gap:12px;margin:10px 0}
-    button{border:0;border-radius:10px;padding:10px 14px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.08)}
-    button.primary{background:#111;color:#fff}
-    button.secondary{background:#eaeef3}
-    .log{white-space:pre-wrap;background:#0a0a0a;color:#d6ffd6;border-radius:10px;padding:12px;font-size:12px;max-height:200px;overflow:auto}
-    a{color:#0d6efd;text-decoration:none}
+    body {
+      font-family: 'Poppins', sans-serif;
+      background: linear-gradient(135deg, #f4f5f7, #e8ebee);
+      margin: 0;
+      padding: 24px;
+      color: #222;
+    }
+
+    .card {
+      background: #ffffff;
+      border-radius: 18px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+      padding: 24px;
+      margin: 18px auto;
+      max-width: 900px;
+      transition: transform 0.2s ease, box-shadow 0.3s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.12);
+    }
+
+    h2 {
+      margin: 0 0 14px 0;
+      font-weight: 600;
+      font-size: 1.4em;
+      color: #333;
+      border-left: 5px solid #444;
+      padding-left: 10px;
+    }
+
+    .item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #f8f9fb;
+      border-radius: 12px;
+      padding: 16px 18px;
+      margin: 10px 0;
+      font-size: 1.05em;
+      color: #111;
+      transition: background 0.3s ease;
+    }
+
+    .item:hover {
+      background: #eef1f5;
+    }
+
+    .dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #e74c3c; /* red */
+      cursor: pointer;
+      box-shadow: 0 0 4px rgba(0, 0, 0, 0.2);
+      transition: background 0.3s ease, transform 0.15s ease;
+    }
+
+    .dot.ok {
+      background: #27ae60; /* green */
+      transform: scale(1.2);
+    }
+
+    .row {
+      display: flex;
+      gap: 12px;
+      margin: 10px 0;
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 18px;
+      cursor: pointer;
+      font-size: 1em;
+      font-weight: 500;
+      transition: background 0.3s ease, transform 0.1s ease;
+    }
+
+    button.primary {
+      background: #222;
+      color: #fff;
+    }
+
+    button.primary:hover {
+      background: #444;
+      transform: scale(1.03);
+    }
+
+    button.secondary {
+      background: #e9edf2;
+      color: #333;
+    }
+
+    button.secondary:hover {
+      background: #dfe3e9;
+      transform: scale(1.03);
+    }
+
+    .log {
+      white-space: pre-wrap;
+      background: #0a0a0a;
+      color: #d6ffd6;
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 13px;
+      max-height: 200px;
+      overflow: auto;
+      margin-top: 10px;
+    }
+
+    a {
+      color: #007bff;
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
   </style>
 </head>
+
 <body>
   <div class="card">
     <h2>Audio Controls</h2>
     <div class="row">
-      <button id="btnStart" class="primary">Start</button>
-      <button id="btnStop" class="secondary" disabled>Stop & Upload</button>
-      <button id="btnReset" class="secondary">Reset Lights</button>
+      <button id="btnStart" class="primary">🎙️ Start</button>
+      <button id="btnStop" class="secondary" disabled>⏹️ Stop & Upload</button>
+      <button id="btnReset" class="secondary">🔄 Reset Lights</button>
       <a id="dl" style="display:none" target="_blank">Download transcript</a>
     </div>
     <small>Recording format: WebM (Opus). Your API key stays on the server.</small>
-    <div id="status" class="log" style="margin-top:12px;"></div>
+    <div id="status" class="log"></div>
   </div>
 
   <div class="card" id="checklist"></div>
 
 <script>
-const BACKEND_BASE = "https://timeout-checklist-server.onrender.com"; // ← 改成你的後端
+const BACKEND_BASE = "https://timeout-checklist-server.onrender.com";
+
 const GROUPS = [
   ["Timeout Initiation", [
     "Is everyone ready to begin the timeout?",
@@ -84,7 +199,7 @@ const GROUPS = [
 ];
 
 const checklistEl = document.getElementById("checklist");
-const dotMap = new Map(); // sentence -> dot element
+const dotMap = new Map();
 
 function renderChecklist(){
   checklistEl.innerHTML = "";
@@ -98,13 +213,15 @@ function renderChecklist(){
       row.innerHTML = `<div>${sent}</div><div class="dot" data-sent="${sent}" title="Click to toggle"></div>`;
       group.appendChild(row);
     });
-    const card = document.createElement("div"); card.className="card"; card.appendChild(group);
+    const card = document.createElement("div");
+    card.className="card";
+    card.appendChild(group);
     checklistEl.appendChild(card);
   });
+
   document.querySelectorAll(".dot").forEach(d=>{
     dotMap.set(d.dataset.sent, d);
-    // ← 新增：手動切換紅/綠
-    d.addEventListener('click', () => d.classList.toggle('ok'));
+    d.addEventListener('click', () => d.classList.toggle('ok')); // 手動切換紅/綠
   });
 }
 renderChecklist();
@@ -148,19 +265,18 @@ document.getElementById("btnStop").onclick = stopRec;
 async function onStopAndUpload(){
   log("⏹️ Recording stopped. Uploading…");
   const blob = new Blob(chunks, {type:"audio/webm"});
-  const fd = new FormData(); fd.append("file", blob, "recording.webm");
+  const fd = new FormData();
+  fd.append("file", blob, "recording.webm");
   try{
     const res = await fetch(`${BACKEND_BASE}/upload-audio`, {method:"POST", body:fd});
     if(!res.ok){ throw new Error(await res.text()); }
     const data = await res.json();
     log("✅ STT finished.\nMatched:\n- " + data.matched.join("\n- "));
-    // 點燈
     resetLights();
     (data.matched || []).forEach(sent=>{
       const dot = dotMap.get(sent);
       if(dot) dot.classList.add("ok");
     });
-    // 下載純淨稿
     if (data.transcript_url){
       const a = document.getElementById("dl");
       a.href = `${BACKEND_BASE}${data.transcript_url}`;
