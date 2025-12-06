@@ -311,6 +311,9 @@ function log(s){ statusEl.textContent = (statusEl.textContent + s + "\n").slice(
 
 async function startRec(){
   try{
+    // 開始錄音前，先把之前還在講的 TTS 取消（避免重疊）
+    try { if ("speechSynthesis" in window) speechSynthesis.cancel(); } catch(e) {}
+
     const stream = await navigator.mediaDevices.getUserMedia({audio:true});
     chunks = [];
     mediaRecorder = new MediaRecorder(stream, {mimeType: "audio/webm"});
@@ -357,8 +360,62 @@ async function onStopAndUpload(){
       a.textContent = "Download transcript";
       a.style.display = "inline-block";
     }
+
+    // ====== 念出仍為紅燈的句子 ======
+    const remaining = [...dotMap.entries()]
+      .filter(([, dot]) => !dot.classList.contains('ok'))
+      .map(([sent]) => sent);
+
+    if (remaining.length > 0) {
+      speakLinesOnce(remaining, { rate: 0.95, pitch: 1.0, gapMs: 450 });
+    }
+
   }catch(err){
     log("❌ Upload/STT error: " + err);
+  }
+}
+
+/* ====== TTS：把未完成(紅燈)的句子念一遍 ====== */
+function getEnglishVoice() {
+  if (!("speechSynthesis" in window)) return null;
+  const voices = speechSynthesis.getVoices();
+  if (!voices || voices.length === 0) return null;
+
+  // 優先找英文女聲（找不到就用第一個英文）
+  return voices.find(v => /en-US|en_GB/i.test(v.lang) && /Female|Google US English|Samantha|Jenny|Zira/i.test(v.name))
+      || voices.find(v => /en/i.test(v.lang))
+      || voices[0];
+}
+
+function speakLinesOnce(lines, {rate=1.0, pitch=1.0, gapMs=300} = {}) {
+  if (!("speechSynthesis" in window)) return;
+
+  const doSpeak = () => {
+    const voice = getEnglishVoice();
+    if (!voice) return;
+
+    // 先取消前一次未講完的
+    speechSynthesis.cancel();
+
+    lines.forEach((text, i) => {
+      const u = new SpeechSynthesisUtterance(text);
+      u.voice = voice;
+      u.rate = rate;
+      u.pitch = pitch;
+      u.volume = 1.0;
+      setTimeout(() => speechSynthesis.speak(u), i * gapMs);
+    });
+  };
+
+  // 有些瀏覽器第一次 getVoices() 會是空的，要等事件
+  if (speechSynthesis.getVoices().length === 0) {
+    speechSynthesis.onvoiceschanged = () => {
+      doSpeak();
+      // 用完就清掉避免重複觸發
+      speechSynthesis.onvoiceschanged = null;
+    };
+  } else {
+    doSpeak();
   }
 }
 </script>
