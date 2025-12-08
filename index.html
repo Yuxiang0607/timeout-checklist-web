@@ -193,7 +193,7 @@
     <h2>Audio Controls</h2>
     <div class="row">
       <button id="btnStart" class="primary">🎙️ Start</button>
-      <button id="btnStop" class="secondary" disabled>⏹️ Stop & Upload</button>
+      <button id="btnStop" class="secondary" disabled>⏹️ Stop</button>
       <button id="btnReset" class="secondary">🔄 Reset Lights</button>
       <a id="dl" style="display:none" target="_blank">Download transcript</a>
     </div>
@@ -210,6 +210,7 @@
 <script>
 const BACKEND_BASE = "https://timeout-checklist-server.onrender.com";
 
+// ====== Checklist groups ======
 const GROUPS = [
   ["Timeout Initiation", [
     "Is everyone ready to begin the timeout?",
@@ -259,7 +260,19 @@ const GROUPS = [
 
 const checklistEl = document.getElementById("checklist");
 const dotMap = new Map();
+const statusEl = document.getElementById("status");
+const dlEl = document.getElementById("dl");
 
+// 錄音相關狀態
+let mediaRecorder = null;
+let isRecording = false;
+let stopRequested = false;
+let pendingUploads = 0;
+
+// 用來累積所有 chunk 的文字（客戶端產生 transcript）
+let transcriptLines = [];
+
+// ====== UI：Checklist 渲染 ======
 function renderChecklist(){
   checklistEl.innerHTML = "";
   GROUPS.forEach(([title, items])=>{
@@ -290,6 +303,7 @@ function renderChecklist(){
 }
 renderChecklist();
 
+// ====== 進度條 ======
 function updateProgress(){
   const total = dotMap.size;
   const done = [...dotMap.values()].filter(dot => dot.classList.contains('ok')).length;
@@ -298,29 +312,53 @@ function updateProgress(){
   document.getElementById("progressText").textContent = `${done} / ${total} Completed`;
 }
 
+// ====== Reset Lights ======
 function resetLights(){
   dotMap.forEach(dot=>dot.classList.remove("ok"));
-  document.getElementById("dl").style.display="none";
+  // 清除 transcript download
+  if (dlEl.dataset.blobUrl){
+    URL.revokeObjectURL(dlEl.dataset.blobUrl);
+    delete dlEl.dataset.blobUrl;
+  }
+  dlEl.style.display="none";
+  transcriptLines = [];
   updateProgress();
 }
 document.getElementById("btnReset").onclick = resetLights;
 
-let mediaRecorder, chunks = [];
-const statusEl = document.getElementById("status");
-function log(s){ statusEl.textContent = (statusEl.textContent + s + "\n").slice(-4000); }
+// ====== 日誌 ======
+function log(s){
+  statusEl.textContent = (statusEl.textContent + s + "\n").slice(-4000);
+}
 
+// ====== Start Recording（每 30 秒自動 chunk） ======
 async function startRec(){
   try{
-    // 開始錄音前，先把之前還在講的 TTS 取消（避免重疊）
+    // 停掉前一次還在播的 TTS
     try { if ("speechSynthesis" in window) speechSynthesis.cancel(); } catch(e) {}
 
     const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-    chunks = [];
+    transcriptLines = [];  // 新一輪錄音就重算 transcript
     mediaRecorder = new MediaRecorder(stream, {mimeType: "audio/webm"});
-    mediaRecorder.ondataavailable = e => { if (e.data.size>0) chunks.push(e.data); };
-    mediaRecorder.onstop = onStopAndUpload;
-    mediaRecorder.start();
-    log("🎙️ Recording started…");
+    isRecording = true;
+    stopRequested = false;
+
+    mediaRecorder.ondataavailable = e => {
+      if (e.data && e.data.size > 0){
+        // 每一段 chunk 立即上傳+比對+亮燈
+        uploadChunk(e.data);
+      }
+    };
+
+    mediaRecorder.onstop = () => {
+      log("⏹️ Recording stopped.");
+      // 不在這裡上傳，最後一段也會由 ondataavailable 觸發
+      // speak 的時機交給 checkSpeakRemaining()
+    };
+
+    // 每 30 秒產生一個 chunk；最後 Stop 時會再出一個尾巴 chunk
+    mediaRecorder.start(30000);
+    log("🎙️ Recording started… (auto-chunk every 30s)");
     document.getElementById("btnStart").disabled = true;
     document.getElementById("btnStop").disabled = false;
   }catch(err){
@@ -329,50 +367,110 @@ async function startRec(){
 }
 document.getElementById("btnStart").onclick = startRec;
 
+// ====== Stop Recording（之後等待最後 chunks 上傳完） ======
 function stopRec(){
   if (mediaRecorder && mediaRecorder.state !== "inactive"){
+    stopRequested = true;
+    isRecording = false;
     mediaRecorder.stop();
     document.getElementById("btnStop").disabled = true;
     document.getElementById("btnStart").disabled = false;
+    log("⏹️ Stop requested, waiting for last chunks to finish…");
   }
 }
 document.getElementById("btnStop").onclick = stopRec;
 
-async function onStopAndUpload(){
-  log("⏹️ Recording stopped. Uploading…");
-  const blob = new Blob(chunks, {type:"audio/webm"});
+// ====== 上傳單一 chunk 到 /transcribe-chunk ======
+async function uploadChunk(blob){
+  pendingUploads++;
+  const kb = Math.round(blob.size / 1024);
+  log(`⬆️ Uploading chunk (${kb} KB)…`);
+
   const fd = new FormData();
-  fd.append("file", blob, "recording.webm");
+  // 後端參數名稱是 audio: UploadFile
+  fd.append("audio", blob, "chunk.webm");
+
   try{
-    const res = await fetch(`${BACKEND_BASE}/upload-audio`, {method:"POST", body:fd});
-    if(!res.ok){ throw new Error(await res.text()); }
-    const data = await res.json();
-    log("✅ STT finished.\nMatched:\n- " + data.matched.join("\n- "));
-    resetLights();
-    (data.matched || []).forEach(sent=>{
-      const dot = dotMap.get(sent);
-      if(dot) dot.classList.add("ok");
+    const res = await fetch(`${BACKEND_BASE}/transcribe-chunk`, {
+      method:"POST",
+      body: fd
     });
-    updateProgress();
-    if (data.transcript_url){
-      const a = document.getElementById("dl");
-      a.href = `${BACKEND_BASE}${data.transcript_url}`;
-      a.textContent = "Download transcript";
-      a.style.display = "inline-block";
+    if (!res.ok){
+      throw new Error(await res.text());
+    }
+    const data = await res.json();
+
+    // 累積 raw 句子，給 transcript 用
+    if (data.raw && data.raw.length){
+      data.raw.forEach(line => {
+        transcriptLines.push(line);
+      });
+      updateTranscriptDownload();
     }
 
-    // ====== 念出仍為紅燈的句子 ======
-    const remaining = [...dotMap.entries()]
-      .filter(([, dot]) => !dot.classList.contains('ok'))
-      .map(([sent]) => sent);
+    // 用 hits 來亮燈
+    if (data.hits && data.hits.length){
+      log("✅ Chunk hits:\n- " + data.hits.join("\n- "));
+      data.hits.forEach(sent => {
+        const dot = dotMap.get(sent);
+        if (dot) dot.classList.add("ok");
+      });
+      updateProgress();
+    }else{
+      log("ℹ️ Chunk has no canonical hits.");
+    }
 
-    if (remaining.length > 0) {
-      speakLinesOnce(remaining, { rate: 0.95, pitch: 1.0, gapMs: 450 });
+    // 需要的話也可以顯示 suggestions
+    if (data.suggestions && data.suggestions.length){
+      data.suggestions.forEach(s => {
+        log(`💡 Suggestion: "${s.raw}" → maybe "${s.best}" (score=${s.score})`);
+      });
     }
 
   }catch(err){
-    log("❌ Upload/STT error: " + err);
+    log("❌ Chunk upload/STT error: " + err);
+  }finally{
+    pendingUploads--;
+    checkSpeakRemaining();
   }
+}
+
+// ====== 更新 transcript 下載連結（前端自己組 TXT） ======
+function updateTranscriptDownload(){
+  if (!transcriptLines.length){
+    if (dlEl.dataset.blobUrl){
+      URL.revokeObjectURL(dlEl.dataset.blobUrl);
+      delete dlEl.dataset.blobUrl;
+    }
+    dlEl.style.display = "none";
+    return;
+  }
+  const blob = new Blob([transcriptLines.join("\n") + "\n"], {type: "text/plain"});
+  const url = URL.createObjectURL(blob);
+
+  if (dlEl.dataset.blobUrl){
+    URL.revokeObjectURL(dlEl.dataset.blobUrl);
+  }
+  dlEl.dataset.blobUrl = url;
+  dlEl.href = url;
+  dlEl.textContent = "Download transcript";
+  dlEl.style.display = "inline-block";
+}
+
+// ====== Stop 後，上傳都跑完時，念出所有還是紅燈的句子 ======
+function checkSpeakRemaining(){
+  if (!stopRequested) return;
+  if (pendingUploads > 0) return;  // 還有 chunk 在路上
+
+  const remaining = [...dotMap.entries()]
+    .filter(([, dot]) => !dot.classList.contains("ok"))
+    .map(([sent]) => sent);
+
+  if (remaining.length > 0){
+    speakLinesOnce(remaining, { rate: 0.95, pitch: 1.0, gapMs: 450 });
+  }
+  // 避免重複觸發
+  stopRequested = false;
 }
 
 /* ====== TTS：把未完成(紅燈)的句子念一遍 ====== */
@@ -411,7 +509,6 @@ function speakLinesOnce(lines, {rate=1.0, pitch=1.0, gapMs=300} = {}) {
   if (speechSynthesis.getVoices().length === 0) {
     speechSynthesis.onvoiceschanged = () => {
       doSpeak();
-      // 用完就清掉避免重複觸發
       speechSynthesis.onvoiceschanged = null;
     };
   } else {
